@@ -1,6 +1,6 @@
 {
   "name": "@engr-lynx/cdk-forked-codecommit",
-  "version": "0.123.2",
+  "version": "0.123.28",
   "description": "fork from a git repo to CodeCommit using CDK typescript",
   "main": "./build/index.js",
   "types": "./build/index.d.ts",
@@ -20,9 +20,7 @@
     "@aws-cdk/aws-codecommit": "^1.123.0",
     "@aws-cdk/aws-iam": "^1.123.0",
     "@aws-cdk/aws-lambda-go": "^1.123.0",
-    "@aws-cdk/aws-secretsmanager": "^1.123.0",
     "@aws-cdk/core": "^1.123.0",
-    "@aws-cdk/custom-resources": "^1.123.0",
     "cdk-triggers": "^0.0.115"
   },
   "repository": {
