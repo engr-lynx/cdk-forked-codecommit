@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -10,6 +11,7 @@ import (
 	git "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/config"
 	"github.com/go-git/go-git/v5/storage/memory"
+	"github.com/go-git/go-git/v5/plumbing/transport"
 	"github.com/go-git/go-git/v5/plumbing/transport/http"
 
 	"github.com/aws/aws-lambda-go/lambda"
@@ -20,88 +22,109 @@ import (
 
 func handler(ctx context.Context) (string, error) {
 
+	codecommitPowerUserArn := "arn:aws:iam::aws:policy/AWSCodeCommitPowerUser"
+	codecommitPrincipal := "codecommit.amazonaws.com"
+	remoteName := "aws"
+
+	var errStr string
+	var creds *iam.CreateServiceSpecificCredentialOutput
+	var repo *git.Repository
+
 	srcRepo := os.Getenv("SRC_REPO")
 	destRepo := os.Getenv("DEST_REPO")
 	userName := os.Getenv("USER_NAME")
-	data := fmt.Sprintf("SrcRepo: %v DestRepo: %v", srcRepo, destRepo)
+	data := fmt.Sprintf("SrcRepo: %v DestRepo: %v UserName: %v", srcRepo, destRepo, userName)
 	log.Printf(data)
 
 	sess, err := session.NewSession()
-	if err != nil {
-		return data, fmt.Errorf("error creating session: %s", err.Error())
-	}
 	svc := iam.New(sess)
+	if err != nil {
+		errStr = fmt.Sprintf("error creating session: %s\n", err.Error())
+		goto exit
+	}
 
-	codecommitPowerUserArn := "arn:aws:iam::aws:policy/AWSCodeCommitPowerUser"
 	_, err = svc.AttachUserPolicy(&iam.AttachUserPolicyInput{
 		PolicyArn: aws.String(codecommitPowerUserArn),
 		UserName: aws.String(userName),
 	})
 	if err != nil {
-		return data, fmt.Errorf("error attaching permission to git user: %s", err.Error())
+		errStr = fmt.Sprintf("error attaching permission to git user: %s\n", err.Error())
+		goto exit
 	}
 
-	codecommitPrincipal := "codecommit.amazonaws.com"
-	credentials, err := svc.CreateServiceSpecificCredential(&iam.CreateServiceSpecificCredentialInput{
+	creds, err = svc.CreateServiceSpecificCredential(&iam.CreateServiceSpecificCredentialInput{
 		ServiceName: aws.String(codecommitPrincipal),
 		UserName: aws.String(userName),
 	})
 	if err != nil {
-		return data, fmt.Errorf("error creating git credentials: %s", err.Error())
+		errStr = fmt.Sprintf("error creating git credentials: %s\n", err.Error())
+		goto detachPolicy
 	}
 
-	auth := &http.BasicAuth{
-		Username: aws.StringValue(credentials.ServiceSpecificCredential.ServiceUserName),
-		Password: aws.StringValue(credentials.ServiceSpecificCredential.ServicePassword),
-	}
-
-	repo, err := git.Clone(memory.NewStorage(), nil, &git.CloneOptions{
-		URL:      srcRepo,
+	repo, err = git.Clone(memory.NewStorage(), nil, &git.CloneOptions{
+		URL: srcRepo,
 		Progress: os.Stdout,
 	})
 	if err != nil {
-		return data, fmt.Errorf("clone of source repo failed: %s", err.Error())
+		errStr = fmt.Sprintf("clone of source repo failed: %s\n", err.Error())
+		goto deleteCredential
 	}
 
-	remote, err := repo.CreateRemote(&config.RemoteConfig{
-		Name: "aws",
+	_, err = repo.CreateRemote(&config.RemoteConfig{
+		Name: remoteName,
 		URLs: []string{destRepo},
 	})
 	if err != nil {
-		return data, fmt.Errorf("create remote failed: %s", err.Error())
+		errStr = fmt.Sprintf("create remote failed: %s\n", err.Error())
+		goto deleteCredential
 	}
 
 	for i := 0; i < 25; i++ {
-		err = remote.Push(&git.PushOptions{
-			RemoteName: "aws",
-			Auth:       auth,
+		err = repo.Push(&git.PushOptions{
+			RemoteName: remoteName,
+			Auth: &http.BasicAuth{
+				Username: aws.StringValue(creds.ServiceSpecificCredential.ServiceUserName),
+				Password: aws.StringValue(creds.ServiceSpecificCredential.ServicePassword),
+			},
+			Progress: os.Stdout,
 		})
-		if err == nil || err.Error() != "authorization failed" {
+		if err == nil || err != transport.ErrAuthorizationFailed {
 			break
 		}
+		log.Printf("git user not ready")
 		time.Sleep(5 * time.Second)
+		log.Printf("retrying")
 	}
-	if err != nil {
-		return data, fmt.Errorf("error pushing to CodeCommit repo: %s", err.Error())
+	if err != nil && err != git.NoErrAlreadyUpToDate {
+		errStr = fmt.Sprintf("error pushing to CodeCommit repo: %s\n", err.Error())
+		goto deleteCredential
 	}
 
+deleteCredential:
 	_, err = svc.DeleteServiceSpecificCredential(&iam.DeleteServiceSpecificCredentialInput{
-		ServiceSpecificCredentialId: credentials.ServiceSpecificCredential.ServiceSpecificCredentialId,
+		ServiceSpecificCredentialId: creds.ServiceSpecificCredential.ServiceSpecificCredentialId,
 		UserName: aws.String(userName),
 	})
 	if err != nil {
-		return data, fmt.Errorf("error deleting git credentials: %s", err.Error())
+		errStr += fmt.Sprintf("error deleting git credentials: %s\n", err.Error())
 	}
 
+detachPolicy:
 	_, err = svc.DetachUserPolicy(&iam.DetachUserPolicyInput{
 		PolicyArn: aws.String(codecommitPowerUserArn),
 		UserName: aws.String(userName),
 	})
 	if err != nil {
-		return data, fmt.Errorf("error detaching permission from git user: %s", err.Error())
+		errStr += fmt.Sprintf("error detaching permission from git user: %s\n", err.Error())
 	}
 
-	return data, nil
+exit:
+	if errStr != "" {
+		return data, errors.New(errStr)
+	} else {
+		return data, nil
+	}
+
 }
 
 func main() {

@@ -3,7 +3,6 @@ import {
 } from 'path'
 import {
   Construct,
-  Arn,
   Duration,
 } from '@aws-cdk/core'
 import {
@@ -13,9 +12,6 @@ import {
 import {
   GoFunction,
 } from '@aws-cdk/aws-lambda-go'
-import {
-  Grant,
-} from '@aws-cdk/aws-iam'
 import {
   CustomUser,
 } from '@engr-lynx/cdk-service-patterns'
@@ -39,6 +35,7 @@ export class ForkedRepository extends Repository {
     const timeout = Duration.minutes(5)
     const handler = new GoFunction(this, 'Handler', {
       entry,
+      memorySize: 1024,
       timeout,
     })
     handler.addEnvironment('SRC_REPO', props.srcRepo)
@@ -46,12 +43,7 @@ export class ForkedRepository extends Repository {
     handler.addEnvironment('USER_NAME', user.userName)
     user.grantUpdateCredentials(handler)
     user.grantUpdatePermissions(handler)
-    const resources = [
-      this,
-      user,
-    ]
     new AfterCreate(this, 'Fork', {
-      resources,
       handler,
     })
   }
