@@ -22,6 +22,7 @@ func handler(ctx context.Context) (string, error) {
 
 	srcRepo := os.Getenv("SRC_REPO")
 	destRepo := os.Getenv("DEST_REPO")
+	userName := os.Getenv("USER_NAME")
 	data := fmt.Sprintf("SrcRepo: %v DestRepo: %v", srcRepo, destRepo)
 	log.Printf(data)
 
@@ -31,19 +32,10 @@ func handler(ctx context.Context) (string, error) {
 	}
 	svc := iam.New(sess)
 
-	// ToDo: can this be generated?
-	gitUserName := "git-user"
-	_, err = svc.CreateUser(&iam.CreateUserInput{
-		UserName: aws.String(gitUserName),
-	})
-	if err != nil {
-		return data, fmt.Errorf("error creating git user: %s", err.Error())
-	}
-
 	codecommitPowerUserArn := "arn:aws:iam::aws:policy/AWSCodeCommitPowerUser"
 	_, err = svc.AttachUserPolicy(&iam.AttachUserPolicyInput{
 		PolicyArn: aws.String(codecommitPowerUserArn),
-		UserName: aws.String(gitUserName),
+		UserName: aws.String(userName),
 	})
 	if err != nil {
 		return data, fmt.Errorf("error attaching permission to git user: %s", err.Error())
@@ -52,7 +44,7 @@ func handler(ctx context.Context) (string, error) {
 	codecommitPrincipal := "codecommit.amazonaws.com"
 	credentials, err := svc.CreateServiceSpecificCredential(&iam.CreateServiceSpecificCredentialInput{
 		ServiceName: aws.String(codecommitPrincipal),
-		UserName: aws.String(gitUserName),
+		UserName: aws.String(userName),
 	})
 	if err != nil {
 		return data, fmt.Errorf("error creating git credentials: %s", err.Error())
@@ -95,7 +87,7 @@ func handler(ctx context.Context) (string, error) {
 
 	_, err = svc.DeleteServiceSpecificCredential(&iam.DeleteServiceSpecificCredentialInput{
 		ServiceSpecificCredentialId: credentials.ServiceSpecificCredential.ServiceSpecificCredentialId,
-		UserName: aws.String(gitUserName),
+		UserName: aws.String(userName),
 	})
 	if err != nil {
 		return data, fmt.Errorf("error deleting git credentials: %s", err.Error())
@@ -103,17 +95,10 @@ func handler(ctx context.Context) (string, error) {
 
 	_, err = svc.DetachUserPolicy(&iam.DetachUserPolicyInput{
 		PolicyArn: aws.String(codecommitPowerUserArn),
-		UserName: aws.String(gitUserName),
+		UserName: aws.String(userName),
 	})
 	if err != nil {
 		return data, fmt.Errorf("error detaching permission from git user: %s", err.Error())
-	}
-
-	_, err = svc.DeleteUser(&iam.DeleteUserInput{
-		UserName: aws.String(gitUserName),
-	})
-	if err != nil {
-		return data, fmt.Errorf("error deleting git user: %s", err.Error())
 	}
 
 	return data, nil

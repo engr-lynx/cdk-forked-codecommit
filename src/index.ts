@@ -17,6 +17,9 @@ import {
   Grant,
 } from '@aws-cdk/aws-iam'
 import {
+  CustomUser,
+} from '@engr-lynx/cdk-service-patterns'
+import {
   AfterCreate,
 } from 'cdk-triggers'
 
@@ -31,6 +34,7 @@ export class ForkedRepository extends Repository {
 
   constructor(scope: Construct, id: string, props: ForkedRepositoryProps) {
     super(scope, id, props)
+    const user = new CustomUser(this, 'User')
     const entry = join(__dirname, 'fork')
     const timeout = Duration.minutes(5)
     const handler = new GoFunction(this, 'Handler', {
@@ -39,32 +43,12 @@ export class ForkedRepository extends Repository {
     })
     handler.addEnvironment('SRC_REPO', props.srcRepo)
     handler.addEnvironment('DEST_REPO', this.repositoryCloneUrlHttp)
-    // ToDo: This needs to be in service patterns.
-    const arn = Arn.format({
-      service: 'iam',
-      resource: 'user',
-      region: '',
-      resourceName: '*',
-    }, this.stack)
-    const resourceArns = [
-      arn
-    ]
-    const actions = [
-      'iam:CreateUser',
-      'iam:CreateServiceSpecificCredential',
-      'iam:AttachUserPolicy',
-      'iam:DetachUserPolicy',
-      'iam:DeleteServiceSpecificCredential',
-      'iam:DeleteUser',
-    ]
-    Grant.addToPrincipal({
-      grantee: handler,
-      actions,
-      resourceArns,
-      scope,
-    })
+    handler.addEnvironment('USER_NAME', user.userName)
+    user.grantUpdateCredentials(handler)
+    user.grantUpdatePermissions(handler)
     const resources = [
       this,
+      user,
     ]
     new AfterCreate(this, 'Fork', {
       resources,
